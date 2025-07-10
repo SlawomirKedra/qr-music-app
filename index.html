@@ -2,15 +2,13 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8">
-  <title>QR Player App</title>
+  <title>QR Music App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
-  <script src="https://sdk.scdn.co/spotify-player.js"></script>
   <style>
     body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 2rem; }
     #reader { width: 300px; margin: 1rem auto; }
     .button { background: #1DB954; color: white; padding: 10px 20px; border-radius: 30px; text-decoration: none; display: inline-block; margin-top: 1rem; }
-    iframe { margin-top: 1rem; border-radius: 12px; }
   </style>
 </head>
 <body>
@@ -19,10 +17,62 @@
   <div id="reader" style="display:none;"></div>
 
   <script>
-    const clientId = "b6ea95f0db0843a7bf3bad35ab78d417";
+    const clientId = "b6ea95f0db0843a7bf3bad35ab78d417"; // ← Przykładowy Client ID (własny wstaw tutaj)
     const redirectUri = window.location.origin + window.location.pathname;
-    let accessToken = null;
-    let spotifyPlayer;
+
+    function generateRandomString(length) {
+      let text = '';
+      const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      for (let i = 0; i < length; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+      }
+      return text;
+    }
+
+    async function sha256(plain) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(plain);
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      return btoa(String.fromCharCode(...new Uint8Array(hash)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function redirectToSpotifyAuth() {
+      const codeVerifier = generateRandomString(128);
+      localStorage.setItem('spotify_code_verifier', codeVerifier);
+
+      const codeChallenge = await sha256(codeVerifier);
+      const scope = 'user-read-private user-read-email';
+      const authUrl = 'https://accounts.spotify.com/authorize' +
+        '?response_type=code' +
+        '&client_id=' + encodeURIComponent(clientId) +
+        '&scope=' + encodeURIComponent(scope) +
+        '&redirect_uri=' + encodeURIComponent(redirectUri) +
+        '&code_challenge_method=S256' +
+        '&code_challenge=' + encodeURIComponent(codeChallenge);
+
+      window.location = authUrl;
+    }
+
+    async function exchangeToken(code) {
+      const codeVerifier = localStorage.getItem('spotify_code_verifier');
+      const body = new URLSearchParams({
+        client_id: clientId,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier
+      });
+
+      const response = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+      });
+
+      const data = await response.json();
+      return data.access_token;
+    }
 
     function startScanner() {
       const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
@@ -31,64 +81,23 @@
 
     function onScanSuccess(link) {
       document.getElementById("reader").style.display = "none";
-
       if (link.includes("youtube.com") || link.includes("youtu.be")) {
-        const videoId = extractYouTubeId(link);
-        if (videoId) {
-          document.getElementById("output").innerHTML = `
-            <iframe width="300" height="169" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allowfullscreen></iframe>
-          `;
-        } else {
-          document.getElementById("output").innerText = "❌ Nieprawidłowy link YouTube";
-        }
-      } else if (link.includes("spotify.com/track/")) {
-        const trackId = link.split("track/")[1].split("?")[0];
-        playSpotifyTrack(trackId);
+        document.getElementById("output").innerHTML = `<a href="${link}" class="button" target="_blank">▶️ Odtwórz na YouTube</a>`;
+      } else if (link.includes("spotify.com")) {
+        document.getElementById("output").innerHTML = `<iframe src="https://open.spotify.com/embed/track/${link.split('/track/')[1].split('?')[0]}" width="300" height="80" frameborder="0" allowtransparency="true" allow="encrypted-media"></iframe>`;
       } else {
-        document.getElementById("output").innerText = `❌ Nieznany link: ${link}`;
+        document.getElementById("output").innerHTML = `❌ Nieznany link: ${link}`;
       }
     }
 
-    function extractYouTubeId(url) {
-      const regex = /(?:youtube\.com.*[?&]v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-      const match = url.match(regex);
-      return match ? match[1] : null;
-    }
-
-    function playSpotifyTrack(trackId) {
-      if (!accessToken) {
-        document.getElementById("output").innerText = "❌ Brak tokenu Spotify.";
-        return;
-      }
-
-      fetch(`https://api.spotify.com/v1/me/player/play`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          uris: [`spotify:track:${trackId}`]
-        })
-      }).then(res => {
-        if (res.status === 204) {
-          document.getElementById("output").innerText = "▶️ Odtwarzanie rozpoczęte w Twoim Spotify.";
-        } else {
-          res.json().then(err => {
-            document.getElementById("output").innerText = `❌ Błąd odtwarzania: ${err.error.message}`;
-          });
-        }
-      });
-    }
-
-    // Obsługa autoryzacji Spotify
     window.onload = async () => {
-      const hash = window.location.hash;
-      if (hash.includes("access_token")) {
-        accessToken = new URLSearchParams(hash.substring(1)).get("access_token");
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('code')) {
+        const code = params.get('code');
+        const token = await exchangeToken(code);
 
         const me = await fetch("https://api.spotify.com/v1/me", {
-          headers: { Authorization: `Bearer ${accessToken}` }
+          headers: { Authorization: `Bearer ${token}` }
         }).then(res => res.json());
 
         if (me.product === "premium") {
@@ -96,15 +105,12 @@
           document.getElementById("reader").style.display = "block";
           startScanner();
         } else {
-          document.getElementById("output").innerText = `❌ Zalogowano jako ${me.display_name}, ale nie masz Spotify Premium.`;
+          document.getElementById("output").innerHTML = `❌ Zalogowano jako ${me.display_name}, ale nie masz Spotify Premium.`;
         }
         return;
       }
 
-      // Brak tokenu – przycisk logowania
-      const scopes = "user-read-private user-read-email streaming user-modify-playback-state user-read-playback-state";
-      const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}`;
-      document.getElementById("output").innerHTML = `<a href="${authUrl}" class="button">🔐 Zaloguj się do Spotify</a>`;
+      document.getElementById("output").innerHTML = `<a href="#" onclick="redirectToSpotifyAuth()" class="button">🔐 Zaloguj się do Spotify</a>`;
     };
   </script>
 </body>
