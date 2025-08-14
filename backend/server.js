@@ -1,3 +1,4 @@
+// backend/server.js
 import express from 'express';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
@@ -12,10 +13,14 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+
+// Uwaga: ORIGIN = czysta domena do CORS/cookies (bez ścieżki),
+// REDIRECT_URL = pełny adres frontu (u Ciebie z /qr-music-app), tylko do przekierowania po loginie
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN; // np. https://slawomirkedra.github.io
+const FRONTEND_REDIRECT_URL = process.env.FRONTEND_REDIRECT_URL || FRONTEND_ORIGIN; // np. https://slawomirkedra.github.io/qr-music-app
 
 if (!CLIENT_ID || !REDIRECT_URI || !FRONTEND_ORIGIN) {
-  console.error('Brakuje zmiennych środowiskowych. Ustaw SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI, FRONTEND_ORIGIN');
+  console.error('Brakuje zmiennych: SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI, FRONTEND_ORIGIN (i opcjonalnie FRONTEND_REDIRECT_URL)');
   process.exit(1);
 }
 
@@ -23,21 +28,17 @@ app.use(cookieParser());
 app.use(express.json());
 
 app.use(cors({
-  origin: FRONTEND_ORIGIN,
+  origin: FRONTEND_ORIGIN,  // ważne: bez ścieżki, sama domena
   credentials: true
 }));
 
+// Anti-flood
 const authLimiter = rateLimit({ windowMs: 60_000, max: 60 });
 app.use('/login', authLimiter);
 
 function base64url(input) {
-  return input
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  return input.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest();
 }
@@ -72,11 +73,10 @@ app.get('/login', (req, res) => {
     state
   });
 
-  const url = `https://accounts.spotify.com/authorize?${params.toString()}`;
-  res.redirect(url);
+  res.redirect(`https://accounts.spotify.com/authorize?${params.toString()}`);
 });
 
-// 2) Callback
+// 2) Callback: code -> token
 app.get('/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -118,14 +118,15 @@ app.get('/callback', async (req, res) => {
     res.clearCookie('pkce_verifier');
     res.clearCookie('oauth_state');
 
-    res.redirect(FRONTEND_ORIGIN + '/#/auth/success');
+    // ⬇⬇⬇ KLUCZOWA ZMIANA: redirect na pełny URL frontu (np. z /qr-music-app)
+    res.redirect(FRONTEND_REDIRECT_URL + '/#/auth/success');
   } catch (e) {
     console.error(e);
     res.status(500).send('Błąd callback.');
   }
 });
 
-// 3) Refresh
+// 3) Refresh tokena
 app.post('/refresh', async (req, res) => {
   try {
     const refresh = req.cookies.refresh_token;
@@ -154,7 +155,7 @@ app.post('/refresh', async (req, res) => {
   }
 });
 
-// 4) /me
+// 4) /me – sprawdzenie konta
 app.get('/me', async (req, res) => {
   const token = req.cookies.access_token;
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
@@ -176,7 +177,13 @@ app.get('/sdk-token', (req, res) => {
 // 6) transfer playback
 app.post('/transfer-playback', async (req, res) => {
   const token = req.cookies.access_token;
-  const { device_id } = req.body;
+  let body = '';
+  await new Promise(resolve => {
+    req.on('data', c => body += c);
+    req.on('end', resolve);
+  });
+  const { device_id } = JSON.parse(body || '{}');
+
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   if (!device_id) return res.status(400).json({ error: 'device_id_required' });
 
@@ -189,10 +196,16 @@ app.post('/transfer-playback', async (req, res) => {
   return res.status(r.status).send();
 });
 
-// 7) play
+// 7) play na urządzeniu SDK
 app.post('/play', async (req, res) => {
   const token = req.cookies.access_token;
-  const { device_id, uris } = req.body;
+  let body = '';
+  await new Promise(resolve => {
+    req.on('data', c => body += c);
+    req.on('end', resolve);
+  });
+  const { device_id, uris } = JSON.parse(body || '{}');
+
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   if (!device_id || !Array.isArray(uris) || uris.length === 0) {
     return res.status(400).json({ error: 'device_id_and_uris_required' });
