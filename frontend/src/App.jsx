@@ -120,46 +120,54 @@ export default function App() {
 
   // Graj na stronie – bez otwierania appki/WWW
   async function autoPlay(trackData, parsed){
-    // a) Desktop + Premium + SDK ready => pełny utwór
-    if (!isMobile && authStatus==='ok' && me?.product==='premium' && deviceId && window.__qr_player){
-      try{
-        if (window.__qr_player.activateElement) await window.__qr_player.activateElement();
-        await fetch(`${BACKEND}/transfer-playback`, {
-          method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ device_id: deviceId, play: true })
-        });
-        await new Promise(r=>setTimeout(r, 500)); // krótki „oddech”
-        const uri = `spotify:track:${parsed.id}`;
-        const resp = await fetch(`${BACKEND}/play`, {
-          method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ device_id: deviceId, uris:[uri] })
-        });
-        if (resp.status !== 204) throw new Error('play_not_204');
-        return;
-      }catch(e){
-        console.warn('SDK play fallback:', e);
-      }
-    }
+  // a) Desktop + Premium + SDK ready => pełny utwór
+  if (!isMobile && authStatus==='ok' && me?.product==='premium' && deviceId && window.__qr_player){
+    try{
+      if (window.__qr_player.activateElement) await window.__qr_player.activateElement();
 
-    // b) Mobile / brak SDK / brak Premium → 30s preview (na stronie)
-    if (trackData?.preview_url){
-      try{
-        // zatrzymaj stary preview
-        if (audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
-        const a = new Audio(trackData.preview_url);
-        audioRef.current = a;
-        await a.play();
-        setNotice('Odtwarzam 30s podgląd na stronie.');
-      }catch(e){
-        setNotice('Dotknij „Odtwórz”, aby włączyć dźwięk.');
-        console.warn('Preview autoplay blocked:', e);
+      const t1 = await fetch(`${BACKEND}/transfer-playback`, {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ device_id: deviceId, play: true })
+      });
+      setNotice(`transfer: ${t1.status}`);
+      // dłuższa pauza – częsty fix
+      await new Promise(r=>setTimeout(r, 1200));
+
+      const uri = `spotify:track:${parsed.id}`;
+      const t2 = await fetch(`${BACKEND}/play`, {
+        method:'POST', credentials:'include',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ device_id: deviceId, uris:[uri] })
+      });
+      setNotice(prev => `${prev} • play: ${t2.status}`);
+
+      if (t2.status !== 204 && window.__qr_player?.resume) {
+        await window.__qr_player.resume();
       }
-    }else{
-      setNotice('Tego utworu nie da się odtworzyć na stronie (brak preview).');
+      return;
+    }catch(e){
+      console.warn('SDK play fallback:', e);
+      setNotice('SDK nie wystartował – sprawdź ustawienia dźwięku/DRM i aktywne urządzenia.');
     }
   }
+
+  // b) Mobile / brak SDK / brak Premium → 30s preview (na stronie)
+  if (trackData?.preview_url){
+    try{
+      if (audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
+      const a = new Audio(trackData.preview_url);
+      audioRef.current = a;
+      await a.play();
+      setNotice('Odtwarzam 30s podgląd na stronie.');
+    }catch(e){
+      setNotice('Dotknij „Odtwórz”, aby włączyć dźwięk.');
+    }
+  }else{
+    setNotice('Tego utworu nie da się odtworzyć na stronie (brak preview).');
+  }
+}
+
 
   function loginSpotify() {
     if (scanned?.raw) sessionStorage.setItem('qr_last_raw', scanned.raw);
