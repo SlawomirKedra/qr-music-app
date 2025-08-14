@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import Player from './player/Player.jsx';
@@ -27,22 +28,41 @@ function parseLink(raw) {
 export default function App() {
   const [scanned, setScanned] = useState(null);
   const [me, setMe] = useState(null);
-  const [authStatus, setAuthStatus] = useState('idle');
+  const [authStatus, setAuthStatus] = useState('idle'); // idle | ok | failed
   const [ytId, setYtId] = useState(null);
   const [error, setError] = useState('');
   const [deviceId, setDeviceId] = useState(null);
+  const [statusMsg, setStatusMsg] = useState('');
   const qrRef = useRef(null);
   const qrInstance = useRef(null);
 
+  // Po powrocie z logowania: sprawdź status + przywróć ostatni link
   useEffect(() => {
-    if (location.hash === '#/auth/success') {
-      fetch(`${BACKEND}/me`, { credentials: 'include' })
-        .then(r => r.ok ? r.json() : Promise.reject(r))
-        .then(data => { setMe(data); setAuthStatus('ok'); })
-        .catch(() => setAuthStatus('failed'));
+    async function afterAuth() {
+      if (location.hash === '#/auth/success') {
+        try {
+          const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          setMe(data);
+          setAuthStatus('ok');
+          setStatusMsg(`Zalogowano: ${data.display_name || data.email} (plan: ${data.product})`);
+
+          const saved = sessionStorage.getItem('qr_last_raw');
+          if (saved) {
+            onScan(saved);
+            sessionStorage.removeItem('qr_last_raw');
+          }
+        } catch (e) {
+          setAuthStatus('failed');
+          setStatusMsg('Nie udało się pobrać profilu (/me).');
+        }
+      }
     }
+    afterAuth();
   }, []);
 
+  // Start skanera QR (jeśli dostęp do kamery jest pozwolony)
   useEffect(() => {
     const start = async () => {
       if (!qrRef.current) return;
@@ -51,9 +71,11 @@ export default function App() {
       const html5Qrcode = new Html5Qrcode(id);
       qrInstance.current = html5Qrcode;
       try {
-        await html5Qrcode.start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 }, (decoded) => {
-          onScan(decoded);
-        });
+        await html5Qrcode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: 250 },
+          (decoded) => onScan(decoded)
+        );
       } catch (e) {
         setError('Nie udało się uruchomić kamery. Pozwól na dostęp do kamery lub użyj wklejenia linku.');
       }
@@ -71,6 +93,7 @@ export default function App() {
   }
 
   function loginSpotify() {
+    if (scanned?.raw) sessionStorage.setItem('qr_last_raw', scanned.raw);
     window.location.href = `${BACKEND}/login`;
   }
 
@@ -103,6 +126,30 @@ export default function App() {
         <h1 style={{ fontSize: 28, marginBottom: 8 }}>🎵 QR Music App</h1>
         <p style={{ opacity: .8, marginBottom: 16 }}>Zeskanuj kod QR ze Spotify lub YouTube – aplikacja rozpozna serwis i pozwoli odtworzyć utwór.</p>
 
+        {statusMsg && (
+          <div style={{margin:'8px 0', fontSize:14, opacity:.9}}>
+            {statusMsg}
+            <button
+              onClick={async () => {
+                try {
+                  const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
+                  const d = await r.json();
+                  if (r.ok) {
+                    setMe(d); setAuthStatus('ok');
+                    setStatusMsg(`Zalogowano: ${d.display_name || d.email} (plan: ${d.product})`);
+                  } else {
+                    setAuthStatus('failed');
+                    setStatusMsg(`Nie zalogowano (HTTP ${r.status})`);
+                  }
+                } catch (_) { setStatusMsg('Błąd sprawdzania statusu'); }
+              }}
+              style={{marginLeft:8, padding:'6px 10px', borderRadius:10, border:'1px solid #333', background:'#1e1e1e', color:'#fff'}}
+            >
+              Sprawdź status
+            </button>
+          </div>
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
           <div ref={qrRef} />
 
@@ -111,7 +158,15 @@ export default function App() {
             <input
               type="text"
               placeholder="Wklej URL do utworu (Spotify / YouTube)"
-              onKeyDown={(e)=>{ if(e.key==='Enter'){ onScan(e.currentTarget.value.trim()); } }}
+              onKeyDown={(e)=>{
+                if(e.key==='Enter'){
+                  const val = e.currentTarget.value.trim();
+                  if (val) {
+                    sessionStorage.setItem('qr_last_raw', val);
+                    onScan(val);
+                  }
+                }
+              }}
               style={{ width:'100%', padding:12, borderRadius:12, border:'1px solid #333', background:'#1e1e1e', color:'#fff' }}
             />
           </div>
@@ -128,7 +183,9 @@ export default function App() {
                   <p>Do dalszego działania wymagane jest zalogowanie do Spotify.</p>
 
                   {authStatus !== 'ok' && (
-                    <button onClick={loginSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>Zaloguj przez Spotify</button>
+                    <button onClick={loginSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>
+                      Zaloguj przez Spotify
+                    </button>
                   )}
 
                   {authStatus === 'ok' && me && (
@@ -138,13 +195,21 @@ export default function App() {
                         <div style={{ display:'grid', gap:12 }}>
                           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                             <button onClick={openInSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>Otwórz w Spotify</button>
-                            <a href={`spotify:track:${scanned.parsed.id}`} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', color:'#000', fontWeight:700, textDecoration:'none' }}>Otwórz w aplikacji</a>
+                            {scanned.parsed.subtype === 'track' && (
+                              <a href={`spotify:track:${scanned.parsed.id}`} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', color:'#000', fontWeight:700, textDecoration:'none' }}>
+                                Otwórz w aplikacji
+                              </a>
+                            )}
                           </div>
                           <div style={{ background:'#101010', border:'1px solid #303030', borderRadius:12, padding:12 }}>
                             <h4>Wbudowany odtwarzacz (Web Playback SDK)</h4>
                             <Player backend={BACKEND} onReady={(id)=>setDeviceId(id)} />
                             <div style={{ marginTop:8, display:'flex', gap:8, flexWrap:'wrap' }}>
-                              <button onClick={playInSDK} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>▶ Zagraj w przeglądarce</button>
+                              {scanned.parsed.subtype === 'track' && (
+                                <button onClick={playInSDK} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>
+                                  ▶ Zagraj w przeglądarce
+                                </button>
+                              )}
                             </div>
                             {!deviceId && <small style={{opacity:.7}}>Czekam na inicjalizację playera…</small>}
                           </div>
