@@ -30,7 +30,7 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'   # bez cache!
+          node-version: '20'
 
       - name: Install deps
         run: npm install
@@ -43,7 +43,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: frontend/dist   # <<< kluczowa zmiana
 
   deploy:
     needs: build
