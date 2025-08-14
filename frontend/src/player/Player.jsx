@@ -25,11 +25,14 @@ export default function Player({ backend, onReady }) {
             volume: 0.8
           });
           playerRef.current = player;
+          // udostępnij globalnie do aktywacji dźwięku z przycisku
+          window.__qr_player = player;
 
           player.addListener('ready', ({ device_id }) => {
             setDeviceId(device_id);
             setStatus('ready');
             onReady && onReady(device_id);
+            // przenieś odtwarzanie na to urządzenie (bez startu)
             fetch(`${backend}/transfer-playback`, {
               method: 'POST',
               credentials: 'include',
@@ -71,7 +74,6 @@ export default function Player({ backend, onReady }) {
         document.body.appendChild(script);
       }
 
-      // Fallback: krótki polling
       let tries = 0;
       const poll = setInterval(() => {
         if (window.Spotify && window.Spotify.Player) {
