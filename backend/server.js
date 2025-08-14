@@ -14,13 +14,11 @@ const PORT = process.env.PORT || 8080;
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI;
 
-// Uwaga: ORIGIN = czysta domena do CORS/cookies (bez ścieżki),
-// REDIRECT_URL = pełny adres frontu (u Ciebie z /qr-music-app), tylko do przekierowania po loginie
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN; // np. https://slawomirkedra.github.io
 const FRONTEND_REDIRECT_URL = process.env.FRONTEND_REDIRECT_URL || FRONTEND_ORIGIN; // np. https://slawomirkedra.github.io/qr-music-app
 
 if (!CLIENT_ID || !REDIRECT_URI || !FRONTEND_ORIGIN) {
-  console.error('Brakuje zmiennych: SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI, FRONTEND_ORIGIN (i opcjonalnie FRONTEND_REDIRECT_URL)');
+  console.error('Brakuje SPOTIFY_CLIENT_ID / SPOTIFY_REDIRECT_URI / FRONTEND_ORIGIN');
   process.exit(1);
 }
 
@@ -28,11 +26,10 @@ app.use(cookieParser());
 app.use(express.json());
 
 app.use(cors({
-  origin: FRONTEND_ORIGIN,  // ważne: bez ścieżki, sama domena
-  credentials: true
+  origin: FRONTEND_ORIGIN,
+  credentials: true,
 }));
 
-// Anti-flood
 const authLimiter = rateLimit({ windowMs: 60_000, max: 60 });
 app.use('/login', authLimiter);
 
@@ -118,7 +115,6 @@ app.get('/callback', async (req, res) => {
     res.clearCookie('pkce_verifier');
     res.clearCookie('oauth_state');
 
-    // ⬇⬇⬇ KLUCZOWA ZMIANA: redirect na pełny URL frontu (np. z /qr-music-app)
     res.redirect(FRONTEND_REDIRECT_URL + '/#/auth/success');
   } catch (e) {
     console.error(e);
@@ -155,7 +151,7 @@ app.post('/refresh', async (req, res) => {
   }
 });
 
-// 4) /me – sprawdzenie konta
+// 4) /me – profil
 app.get('/me', async (req, res) => {
   const token = req.cookies.access_token;
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
@@ -174,15 +170,16 @@ app.get('/sdk-token', (req, res) => {
   res.json({ access_token: token });
 });
 
-// 6) transfer playback
+// 6) transfer playback (z opcją natychmiastowego startu)
 app.post('/transfer-playback', async (req, res) => {
   const token = req.cookies.access_token;
-  let body = '';
+
+  let bodyRaw = '';
   await new Promise(resolve => {
-    req.on('data', c => body += c);
+    req.on('data', c => (bodyRaw += c));
     req.on('end', resolve);
   });
-  const { device_id } = JSON.parse(body || '{}');
+  const { device_id, play } = JSON.parse(bodyRaw || '{}');
 
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   if (!device_id) return res.status(400).json({ error: 'device_id_required' });
@@ -190,7 +187,7 @@ app.post('/transfer-playback', async (req, res) => {
   const r = await fetch('https://api.spotify.com/v1/me/player', {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ device_ids: [device_id], play: false })
+    body: JSON.stringify({ device_ids: [device_id], play: !!play })
   });
 
   return res.status(r.status).send();
@@ -199,12 +196,13 @@ app.post('/transfer-playback', async (req, res) => {
 // 7) play na urządzeniu SDK
 app.post('/play', async (req, res) => {
   const token = req.cookies.access_token;
-  let body = '';
+
+  let bodyRaw = '';
   await new Promise(resolve => {
-    req.on('data', c => body += c);
+    req.on('data', c => (bodyRaw += c));
     req.on('end', resolve);
   });
-  const { device_id, uris } = JSON.parse(body || '{}');
+  const { device_id, uris } = JSON.parse(bodyRaw || '{}');
 
   if (!token) return res.status(401).json({ error: 'unauthenticated' });
   if (!device_id || !Array.isArray(uris) || uris.length === 0) {
