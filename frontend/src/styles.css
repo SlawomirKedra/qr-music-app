@@ -1,0 +1,44 @@
+:root{
+  --bg:#121212;--card:#1b1b1b;--muted:#2a2a2a;--text:#fff;--accent:#1DB954;
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+.container{max-width:960px;margin:0 auto;padding:16px}
+.header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+.brand h1{margin:0;font-size:28px}
+.brand p{margin:4px 0 0;opacity:.8}
+.badge{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--muted);padding:6px 10px;border-radius:12px}
+.badge img{border-radius:50%}
+.card{background:var(--card);border:1px solid var(--muted);border-radius:16px;padding:16px}
+.grid{display:grid;gap:16px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:12px;border:none;cursor:pointer;font-weight:700}
+.btn-accent{background:var(--accent);color:#000}
+.btn-ghost{background:#fff;color:#000}
+.input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--muted);background:#1e1e1e;color:#fff}
+
+.qr-wrap{display:flex;justify-content:center}
+.qr-box{width:min(90vw,480px)}
+/* mobilny layout */
+@media (max-width:720px){
+  .container{padding:12px}
+  .brand h1{font-size:24px}
+  .qr-box{width:min(94vw,420px)}
+}
+
+/* prosta animacja bars dla podglądu audio */
+.vu{
+  display:flex;gap:3px;height:16px;align-items:flex-end;
+}
+.vu span{display:block;width:4px;background:var(--accent);opacity:.9;border-radius:2px;animation:vu 800ms infinite ease-in-out}
+.vu span:nth-child(2){animation-delay:80ms}
+.vu span:nth-child(3){animation-delay:160ms}
+.vu span:nth-child(4){animation-delay:240ms}
+.vu span:nth-child(5){animation-delay:320ms}
+@keyframes vu{0%,100%{height:4px}50%{height:16px}}
+.details{margin-top:8px;font-size:14px;opacity:.9}
+.details pre{white-space:pre-wrap;margin:8px 0 0}
+.track-head{display:flex;gap:12px;align-items:center}
+.track-head img{width:72px;height:72px;border-radius:8px;object-fit:cover;border:1px solid var(--muted)}
+.track-meta b{display:block;font-size:18px}
+.track-meta small{opacity:.8}
