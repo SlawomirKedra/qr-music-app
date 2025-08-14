@@ -34,7 +34,9 @@ export default function App() {
   const [deviceId, setDeviceId] = useState(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [track, setTrack] = useState(null);
+  const [collapsed, setCollapsed] = useState(true);   // <— domyślnie zwinięte
   const [showDetails, setShowDetails] = useState(false);
+  const [notice, setNotice] = useState('');
   const audioRef = useRef(null);
 
   const qrRef = useRef(null);
@@ -42,15 +44,12 @@ export default function App() {
 
   // Login status
   useEffect(() => {
-    async function afterAuth() {
-      const loadProfile = async () => {
+    async function loadProfile() {
+      try {
         const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
         if (!r.ok) throw new Error();
         const d = await r.json();
         setMe(d); setAuthStatus('ok');
-      };
-      try {
-        await loadProfile();
         if (location.hash === '#/auth/success') {
           setStatusMsg('Zalogowano.');
           const saved = sessionStorage.getItem('qr_last_raw');
@@ -58,7 +57,7 @@ export default function App() {
         }
       } catch { /* not logged */ }
     }
-    afterAuth();
+    loadProfile();
   }, []);
 
   // QR start
@@ -87,23 +86,22 @@ export default function App() {
     const parsed = parseLink(text);
     setScanned({ raw: text, parsed });
     setError('');
+    setNotice('');
     setTrack(null);
     setShowDetails(false);
+    setCollapsed(true);           // po każdym skanie – zwinąć
     if (parsed.type === 'youtube') setYtId(parsed.id); else setYtId(null);
 
-    // Auto-akcja po skanie
+    // Po skanie od razu pobierz dane i spróbuj zagrać NA MIEJSCU
     if (parsed.type === 'spotify' && parsed.subtype === 'track') {
       fetchTrackDetails(parsed.id).then((t)=> {
         setTrack(t);
         autoPlay(t, parsed);
       });
-    } else if (parsed.type === 'spotify') {
-      // album/playlist – od razu otwieramy app/web
-      openAppOrWeb(parsed);
     }
   }
 
-  // Pobranie szczegółów utworu (okładka, artyści, preview)
+  // Szczegóły utworu
   async function fetchTrackDetails(id){
     try{
       const tokRes = await fetch(`${BACKEND}/sdk-token`, { credentials: 'include' });
@@ -120,9 +118,9 @@ export default function App() {
     }
   }
 
-  // Sprytne odtwarzanie po skanie
+  // Graj na stronie – bez otwierania appki/WWW
   async function autoPlay(trackData, parsed){
-    // Desktop + Premium + SDK ready => play pełny utwór
+    // a) Desktop + Premium + SDK ready => pełny utwór
     if (!isMobile && authStatus==='ok' && me?.product==='premium' && deviceId && window.__qr_player){
       try{
         if (window.__qr_player.activateElement) await window.__qr_player.activateElement();
@@ -131,31 +129,35 @@ export default function App() {
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({ device_id: deviceId, play: true })
         });
-        await new Promise(r=>setTimeout(r, 500));
+        await new Promise(r=>setTimeout(r, 500)); // krótki „oddech”
         const uri = `spotify:track:${parsed.id}`;
-        await fetch(`${BACKEND}/play`, {
+        const resp = await fetch(`${BACKEND}/play`, {
           method:'POST', credentials:'include',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({ device_id: deviceId, uris:[uri] })
         });
+        if (resp.status !== 204) throw new Error('play_not_204');
         return;
-      }catch(e){ console.warn('SDK play fallback:', e); }
+      }catch(e){
+        console.warn('SDK play fallback:', e);
+      }
     }
 
-    // Mobile (lub brak Premium/SDK) => 30s preview lub app/web
+    // b) Mobile / brak SDK / brak Premium → 30s preview (na stronie)
     if (trackData?.preview_url){
       try{
-        // zatrzymaj poprzedni podgląd (jeśli leciał)
-        audioRef.current?.pause();
+        // zatrzymaj stary preview
+        if (audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
         const a = new Audio(trackData.preview_url);
         audioRef.current = a;
         await a.play();
+        setNotice('Odtwarzam 30s podgląd na stronie.');
       }catch(e){
-        // jeśli przeglądarka blokuje autoplay: pokaż przycisk Odtwórz
+        setNotice('Dotknij „Odtwórz”, aby włączyć dźwięk.');
         console.warn('Preview autoplay blocked:', e);
       }
     }else{
-      openAppOrWeb(parsed);
+      setNotice('Tego utworu nie da się odtworzyć na stronie (brak preview).');
     }
   }
 
@@ -164,17 +166,19 @@ export default function App() {
     window.location.href = `${BACKEND}/login`;
   }
 
-  function openAppOrWeb(p) {
-    const deep = `spotify:${p.subtype}:${p.id}`;
-    const web  = `https://open.spotify.com/${p.subtype}/${p.id}`;
-    let jumped=false; try{ window.location.href = deep; jumped=true; }catch{}
-    setTimeout(()=>{ if(!jumped) window.open(web,'_blank'); }, 900);
-  }
-
-  // Ręczny przycisk „Odtwórz” (fallback)
+  // Ręczny przycisk „Odtwórz” (uruchamia tę samą logikę)
   async function playSmart(){
     if(!scanned) return;
-    onScan(scanned.raw); // powtórz autologikę na wypadek blokady autoplay
+    await autoPlay(track, scanned.parsed);
+  }
+
+  function openInSpotifyWeb() {
+    if (!scanned) return;
+    const p = scanned.parsed;
+    if (p?.type === 'spotify') {
+      const url = `https://open.spotify.com/${p.subtype}/${p.id}`;
+      window.open(url, '_blank');
+    }
   }
 
   return (
@@ -213,61 +217,79 @@ export default function App() {
         </div>
 
         {error && <div className="card" style={{background:'#2b1d1d',borderColor:'#5c2b2b'}}>{error}</div>}
+        {notice && <div className="card" style={{background:'#18261c',borderColor:'#2a4b35'}}>{notice}</div>}
 
-        {/* KARTA UTWORU */}
+        {/* KARTA UTWORU – DOMYŚLNIE ZWINIĘTA */}
         {scanned?.parsed?.type === 'spotify' && scanned.parsed.subtype === 'track' && (
           <div className="card">
-            <h3 style={{marginTop:0}}>Utwór</h3>
-
-            <div className="track-head">
-              <img
-                src={track?.album?.images?.[1]?.url || track?.album?.images?.[0]?.url || 'https://via.placeholder.com/72'}
-                alt="okładka"
-              />
-              <div className="track-meta">
-                <b>{track?.name || '—'}</b>
-                <small>
-                  {track?.artists?.map(a=>a.name).join(', ') || '—'} • {track?.album?.name || '—'}
-                </small>
-                {/* Jeśli gramy preview – pokaż animację */}
+            <button
+              onClick={()=>setCollapsed(c=>!c)}
+              className="btn"
+              style={{width:'100%',justifyContent:'space-between',background:'transparent',border:'1px solid var(--muted)'}}
+            >
+              <span style={{display:'flex',alignItems:'center',gap:8}}>
+                <b>Utwór</b>
+                {/* mini VU gdy leci preview */}
                 {audioRef.current && !audioRef.current.paused && (
-                  <div className="vu" style={{marginTop:6}}>
-                    <span></span><span></span><span></span><span></span><span></span>
+                  <span className="vu" aria-hidden><span></span><span></span><span></span><span></span><span></span></span>
+                )}
+              </span>
+              <span style={{opacity:.8}}>{collapsed ? 'Pokaż' : 'Ukryj'}</span>
+            </button>
+
+            {!collapsed && (
+              <div style={{marginTop:12}}>
+                <div className="track-head">
+                  <img
+                    src={track?.album?.images?.[1]?.url || track?.album?.images?.[0]?.url || 'https://via.placeholder.com/72'}
+                    alt="okładka"
+                  />
+                  <div className="track-meta">
+                    <b>{track?.name || '—'}</b>
+                    <small>
+                      {track?.artists?.map(a=>a.name).join(', ') || '—'} • {track?.album?.name || '—'}
+                    </small>
+                    {audioRef.current && !audioRef.current.paused && (
+                      <div className="vu" style={{marginTop:6}}>
+                        <span></span><span></span><span></span><span></span><span></span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>
+                  {authStatus !== 'ok' ? (
+                    <button className="btn btn-accent" onClick={loginSpotify}>Zaloguj przez Spotify</button>
+                  ) : (
+                    <button className="btn btn-accent" onClick={playSmart}>▶ Odtwórz</button>
+                  )}
+                  <button className="btn btn-ghost" onClick={()=>setShowDetails(s=>!s)}>
+                    {showDetails ? 'Ukryj szczegóły' : 'Pokaż szczegóły'}
+                  </button>
+                  <button className="btn btn-ghost" onClick={openInSpotifyWeb}>Otwórz w Spotify (www)</button>
+                </div>
+
+                {showDetails && (
+                  <div className="details">
+                    <pre>{JSON.stringify({
+                      id: track?.id,
+                      name: track?.name,
+                      artists: track?.artists?.map(a=>a.name),
+                      album: track?.album?.name,
+                      release_date: track?.album?.release_date,
+                      duration_ms: track?.duration_ms,
+                      explicit: track?.explicit,
+                      popularity: track?.popularity,
+                      preview_url: track?.preview_url
+                    }, null, 2)}</pre>
                   </div>
                 )}
-              </div>
-            </div>
-
-            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>
-              {authStatus !== 'ok' ? (
-                <button className="btn btn-accent" onClick={loginSpotify}>Zaloguj przez Spotify</button>
-              ) : (
-                <button className="btn btn-accent" onClick={playSmart}>▶ Odtwórz</button>
-              )}
-              <button className="btn btn-ghost" onClick={()=>setShowDetails(s=>!s)}>
-                {showDetails ? 'Ukryj szczegóły' : 'Pokaż szczegóły'}
-              </button>
-            </div>
-
-            {showDetails && (
-              <div className="details">
-                <pre>{JSON.stringify({
-                  id: track?.id,
-                  name: track?.name,
-                  artists: track?.artists?.map(a=>a.name),
-                  album: track?.album?.name,
-                  release_date: track?.album?.release_date,
-                  duration_ms: track?.duration_ms,
-                  explicit: track?.explicit,
-                  popularity: track?.popularity,
-                  preview_url: track?.preview_url
-                }, null, 2)}</pre>
               </div>
             )}
           </div>
         )}
 
-        {/* YouTube (jak coś zeskanujesz YT) */}
+        {/* YT – bez zmian */}
         {ytId && (
           <div className="card">
             <div style={{ position:'relative', paddingTop:'56.25%', borderRadius:12, overflow:'hidden', border:'1px solid var(--muted)' }}>
