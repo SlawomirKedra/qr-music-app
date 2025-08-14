@@ -1,13 +1,5 @@
-// frontend/src/player/Player.jsx
 import React, { useEffect, useRef, useState } from 'react';
 
-/**
- * Stabilny init Spotify Web Playback SDK:
- * - wstrzykuje skrypt tylko raz,
- * - jeśli window.Spotify już jest, inicjuje natychmiast,
- * - fallback: czeka na globalny callback i dodatkowo polluje,
- * - pokazuje konkretne błędy w konsoli (auth/account/init).
- */
 export default function Player({ backend, onReady }) {
   const [status, setStatus] = useState('init'); // init | loading | ready | error
   const [deviceId, setDeviceId] = useState(null);
@@ -38,7 +30,6 @@ export default function Player({ backend, onReady }) {
             setDeviceId(device_id);
             setStatus('ready');
             onReady && onReady(device_id);
-            // przenieś odtwarzanie na to urządzenie (bez startu)
             fetch(`${backend}/transfer-playback`, {
               method: 'POST',
               credentials: 'include',
@@ -53,7 +44,6 @@ export default function Player({ backend, onReady }) {
           });
 
           player.addListener('player_state_changed', state => setPlayerState(state));
-
           player.addListener('initialization_error', ({ message }) => { console.error('SDK init error:', message); setStatus('error'); });
           player.addListener('authentication_error', ({ message }) => { console.error('SDK auth error:', message); setStatus('error'); });
           player.addListener('account_error', ({ message }) => { console.error('SDK account error (Premium?):', message); setStatus('error'); });
@@ -65,18 +55,13 @@ export default function Player({ backend, onReady }) {
         }
       }
 
-      // Jeśli SDK już jest załadowane — od razu inicjuj
       if (window.Spotify && window.Spotify.Player) {
         createPlayer();
         return;
       }
 
-      // Ustaw callback
-      window.onSpotifyWebPlaybackSDKReady = () => {
-        createPlayer();
-      };
+      window.onSpotifyWebPlaybackSDKReady = () => createPlayer();
 
-      // Wstrzyknij skrypt tylko raz
       let script = document.getElementById('spotify-sdk');
       if (!script) {
         script = document.createElement('script');
@@ -86,19 +71,19 @@ export default function Player({ backend, onReady }) {
         document.body.appendChild(script);
       }
 
-      // Fallback: jeśli callback by nie zadziałał, sprawdzaj co 200ms przez 5s
+      // Fallback: krótki polling
       let tries = 0;
       const poll = setInterval(() => {
         if (window.Spotify && window.Spotify.Player) {
           clearInterval(poll);
-          if (status !== 'ready') createPlayer();
+          createPlayer();
         }
         if (++tries > 25) clearInterval(poll);
       }, 200);
     }
 
     initSDK();
-  }, [backend, onReady]); // eslint-disable-line
+  }, [backend, onReady]);
 
   return (
     <div>
