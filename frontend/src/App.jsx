@@ -35,7 +35,6 @@ export default function App() {
   const qrRef = useRef(null);
   const qrInstance = useRef(null);
 
-  // Po powrocie z logowania: sprawdź profil + przywróć link
   useEffect(() => {
     async function afterAuth() {
       if (location.hash === '#/auth/success') {
@@ -59,18 +58,13 @@ export default function App() {
       } else {
         try {
           const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
-          if (r.ok) {
-            const d = await r.json();
-            setMe(d);
-            setAuthStatus('ok');
-          }
+          if (r.ok) { const d = await r.json(); setMe(d); setAuthStatus('ok'); }
         } catch {}
       }
     }
     afterAuth();
   }, []);
 
-  // Start skanera QR
   useEffect(() => {
     const start = async () => {
       if (!qrRef.current) return;
@@ -105,44 +99,33 @@ export default function App() {
     window.location.href = `${BACKEND}/login`;
   }
 
-  // „Otwórz w aplikacji” z fallbackiem na https
-  function openInSpotifyApp() {
-    if (!scanned) return;
-    const p = scanned.parsed;
-    if (p?.type !== 'spotify') return;
+  function openAppOrWeb(p) {
     const deep = `spotify:${p.subtype}:${p.id}`;
-    const web = `https://open.spotify.com/${p.subtype}/${p.id}`;
-    let opened = false;
-    try {
-      // próba otwarcia aplikacji (wymaga zarejestrowanego handlera)
-      window.location.href = deep;
-      opened = true;
-    } catch {}
-    // fallback do web po krótkiej chwili
-    setTimeout(() => {
-      if (!opened) window.open(web, '_blank');
-    }, 1200);
+    const web  = `https://open.spotify.com/${p.subtype}/${p.id}`;
+    let jumped = false;
+    try { window.location.href = deep; jumped = true; } catch {}
+    setTimeout(() => { if (!jumped) window.open(web, '_blank'); }, 1200);
   }
 
-  function openInSpotifyWeb() {
+  async function playSmart() {
     if (!scanned) return;
     const p = scanned.parsed;
-    if (p?.type === 'spotify') {
-      const url = `https://open.spotify.com/${p.subtype}/${p.id}`;
-      window.open(url, '_blank');
+    if (p.type !== 'spotify' || p.subtype !== 'track') {
+      // dla non-track i tak otwórz w Spotify
+      return openAppOrWeb(p);
     }
-  }
 
-  // Play w przeglądarce — aktywacja audio + Web API play
-  async function playInSDK() {
-    if (!scanned || !deviceId) return;
-    const p = scanned.parsed;
-    if (p.type === 'spotify' && p.subtype === 'track') {
+    // 1) jeśli Premium + SDK gotowy → graj w przeglądarce
+    if (authStatus === 'ok' && me?.product === 'premium' && deviceId && window.__qr_player) {
       try {
-        // bardzo ważne: aktywacja elementu audio po kliknięciu użytkownika
-        if (window.__qr_player?.activateElement) {
-          await window.__qr_player.activateElement();
-        }
+        if (window.__qr_player.activateElement) await window.__qr_player.activateElement();
+        // upewnij się, że to urządzenie jest aktywne i ma auto-play
+        await fetch(`${BACKEND}/transfer-playback`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: deviceId, play: true })
+        });
         const uri = `spotify:track:${p.id}`;
         await fetch(`${BACKEND}/play`, {
           method: 'POST',
@@ -150,10 +133,14 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_id: deviceId, uris: [uri] })
         });
+        return;
       } catch (e) {
-        console.error('playInSDK error:', e);
+        console.warn('Falling back to app/web, reason:', e);
       }
     }
+
+    // 2) fallback: aplikacja / web
+    openAppOrWeb(p);
   }
 
   return (
@@ -185,13 +172,8 @@ export default function App() {
                 try {
                   const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
                   const d = await r.json();
-                  if (r.ok) {
-                    setMe(d); setAuthStatus('ok');
-                    setStatusMsg(`Zalogowano: ${d.display_name || d.email} (plan: ${d.product})`);
-                  } else {
-                    setAuthStatus('failed');
-                    setStatusMsg(`Nie zalogowano (HTTP ${r.status})`);
-                  }
+                  if (r.ok) { setMe(d); setAuthStatus('ok'); setStatusMsg(`Zalogowano: ${d.display_name || d.email} (plan: ${d.product})`); }
+                  else { setAuthStatus('failed'); setStatusMsg(`Nie zalogowano (HTTP ${r.status})`); }
                 } catch { setStatusMsg('Błąd sprawdzania statusu'); }
               }}
               style={{marginLeft:8, padding:'6px 10px', borderRadius:10, border:'1px solid #333', background:'#1e1e1e', color:'#fff'}}
@@ -212,10 +194,7 @@ export default function App() {
               onKeyDown={(e)=>{
                 if(e.key==='Enter'){
                   const val = e.currentTarget.value.trim();
-                  if (val) {
-                    sessionStorage.setItem('qr_last_raw', val);
-                    onScan(val);
-                  }
+                  if (val) { sessionStorage.setItem('qr_last_raw', val); onScan(val); }
                 }
               }}
               style={{ width:'100%', padding:12, borderRadius:12, border:'1px solid #333', background:'#1e1e1e', color:'#fff' }}
@@ -245,41 +224,19 @@ export default function App() {
                       Zaloguj przez Spotify
                     </button>
                   ) : (
-                    me && (
-                      <div style={{ marginTop:8 }}>
-                        <p>Użytkownik: <strong>{me.display_name || me.email}</strong>, plan: <strong>{me.product}</strong></p>
-
-                        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
-                          <button onClick={openInSpotifyWeb} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>
-                            Otwórz w Spotify
-                          </button>
-                          {scanned.parsed.subtype === 'track' && (
-                            <button onClick={openInSpotifyApp} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>
-                              Otwórz w aplikacji
-                            </button>
-                          )}
-                        </div>
-
-                        {me.product === 'premium' ? (
-                          <div style={{ background:'#101010', border:'1px solid #303030', borderRadius:12, padding:12 }}>
-                            <h4>Wbudowany odtwarzacz (Web Playback SDK)</h4>
-                            <Player backend={BACKEND} onReady={(id)=>setDeviceId(id)} />
-                            <div style={{ marginTop:8, display:'flex', gap:8, flexWrap:'wrap' }}>
-                              {scanned.parsed.subtype === 'track' && (
-                                <button onClick={playInSDK} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>
-                                  ▶ Zagraj w przeglądarce
-                                </button>
-                              )}
-                            </div>
-                            {!deviceId && <small style={{opacity:.7}}>Czekam na inicjalizację playera…</small>}
-                          </div>
-                        ) : (
-                          <div style={{ background:'#2b1d1d', border:'1px solid #5c2b2b', padding:12, borderRadius:12 }}>
-                            <b>Brak Premium</b> – pełne odtwarzanie w przeglądarce wymaga konta Premium. Nadal możesz otworzyć utwór w aplikacji.
-                          </div>
-                        )}
+                    <div style={{ marginTop:8 }}>
+                      <button
+                        onClick={playSmart}
+                        style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}
+                      >
+                        ▶ Odtwórz
+                      </button>
+                      <div style={{ marginTop:12, background:'#101010', border:'1px solid #303030', borderRadius:12, padding:12 }}>
+                        <h4>Wbudowany odtwarzacz (Web Playback SDK)</h4>
+                        <Player backend={BACKEND} onReady={id => setDeviceId(id)} />
+                        {!deviceId && <small style={{opacity:.7}}>Czekam na inicjalizację playera…</small>}
                       </div>
-                    )
+                    </div>
                   )}
                 </div>
               )}
