@@ -36,7 +36,7 @@ export default function App() {
   const qrRef = useRef(null);
   const qrInstance = useRef(null);
 
-  // Po powrocie z logowania: sprawdź status + przywróć ostatni link
+  // Po powrocie z logowania: sprawdź profil + przywróć link
   useEffect(() => {
     async function afterAuth() {
       if (location.hash === '#/auth/success') {
@@ -57,12 +57,22 @@ export default function App() {
           setAuthStatus('failed');
           setStatusMsg('Nie udało się pobrać profilu (/me).');
         }
+      } else {
+        // jeśli nie wracamy z auth, ale mamy sesję — spróbuj pobrać profil
+        try {
+          const r = await fetch(`${BACKEND}/me`, { credentials: 'include' });
+          if (r.ok) {
+            const d = await r.json();
+            setMe(d);
+            setAuthStatus('ok');
+          }
+        } catch {}
       }
     }
     afterAuth();
   }, []);
 
-  // Start skanera QR (jeśli dostęp do kamery jest pozwolony)
+  // Start skanera QR
   useEffect(() => {
     const start = async () => {
       if (!qrRef.current) return;
@@ -123,8 +133,24 @@ export default function App() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', color: '#fff', background:'#121212', minHeight:'100vh' }}>
       <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-        <h1 style={{ fontSize: 28, marginBottom: 8 }}>🎵 QR Music App</h1>
-        <p style={{ opacity: .8, marginBottom: 16 }}>Zeskanuj kod QR ze Spotify lub YouTube – aplikacja rozpozna serwis i pozwoli odtworzyć utwór.</p>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:12 }}>
+          <div>
+            <h1 style={{ fontSize: 28, marginBottom: 4 }}>🎵 QR Music App</h1>
+            <p style={{ opacity: .8, margin: 0 }}>Zeskanuj kod QR ze Spotify lub YouTube – aplikacja rozpozna serwis i pozwoli odtworzyć utwór.</p>
+          </div>
+          {/* Badge profilu po zalogowaniu */}
+          {me && (
+            <div style={{ display:'flex', alignItems:'center', gap:10, background:'#1b1b1b', border:'1px solid #2a2a2a', padding:'6px 10px', borderRadius:12 }}>
+              {me.images?.[0]?.url && (
+                <img src={me.images[0].url} alt="avatar" width="28" height="28" style={{ borderRadius:'50%' }} />
+              )}
+              <div style={{ lineHeight:1.1 }}>
+                <div style={{ fontWeight:600 }}>{me.display_name || me.email}</div>
+                <div style={{ fontSize:12, opacity:.8 }}>plan: {me.product}</div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {statusMsg && (
           <div style={{margin:'8px 0', fontSize:14, opacity:.9}}>
@@ -180,81 +206,29 @@ export default function App() {
 
               {scanned.parsed.type === 'spotify' && (
                 <div>
-                  <p>Do dalszego działania wymagane jest zalogowanie do Spotify.</p>
+                  {/* Komunikat o logowaniu pokazuj TYLKO gdy nie zalogowany */}
+                  {authStatus !== 'ok' && <p>Do dalszego działania wymagane jest zalogowanie do Spotify.</p>}
 
-                  {authStatus !== 'ok' && (
+                  {authStatus !== 'ok' ? (
                     <button onClick={loginSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>
                       Zaloguj przez Spotify
                     </button>
-                  )}
-
-                  {authStatus === 'ok' && me && (
-                    <div style={{ marginTop:8 }}>
-                      <p>Użytkownik: <strong>{me.display_name || me.email}</strong>, plan: <strong>{me.product}</strong></p>
-                      {me.product === 'premium' ? (
-                        <div style={{ display:'grid', gap:12 }}>
-                          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-                            <button onClick={openInSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>Otwórz w Spotify</button>
-                            {scanned.parsed.subtype === 'track' && (
-                              <a href={`spotify:track:${scanned.parsed.id}`} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', color:'#000', fontWeight:700, textDecoration:'none' }}>
-                                Otwórz w aplikacji
-                              </a>
-                            )}
-                          </div>
-                          <div style={{ background:'#101010', border:'1px solid #303030', borderRadius:12, padding:12 }}>
-                            <h4>Wbudowany odtwarzacz (Web Playback SDK)</h4>
-                            <Player backend={BACKEND} onReady={(id)=>setDeviceId(id)} />
-                            <div style={{ marginTop:8, display:'flex', gap:8, flexWrap:'wrap' }}>
+                  ) : (
+                    me && (
+                      <div style={{ marginTop:8 }}>
+                        <p>Użytkownik: <strong>{me.display_name || me.email}</strong>, plan: <strong>{me.product}</strong></p>
+                        {me.product === 'premium' ? (
+                          <div style={{ display:'grid', gap:12 }}>
+                            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                              <button onClick={openInSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>Otwórz w Spotify</button>
                               {scanned.parsed.subtype === 'track' && (
-                                <button onClick={playInSDK} style={{ padding:'10px 16px', borderRadius:12, background:'#1DB954', border:'none', color:'#000', fontWeight:700 }}>
-                                  ▶ Zagraj w przeglądarce
-                                </button>
+                                <a href={`spotify:track:${scanned.parsed.id}`} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', color:'#000', fontWeight:700, textDecoration:'none' }}>
+                                  Otwórz w aplikacji
+                                </a>
                               )}
                             </div>
-                            {!deviceId && <small style={{opacity:.7}}>Czekam na inicjalizację playera…</small>}
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ background:'#2b1d1d', border:'1px solid #5c2b2b', padding:12, borderRadius:12 }}>
-                          <b>Brak Premium</b> – pełne odtwarzanie w przeglądarce wymaga konta Premium. Nadal możesz otworzyć utwór w aplikacji.
-                          <div style={{ marginTop:8 }}>
-                            <button onClick={openInSpotify} style={{ padding:'10px 16px', borderRadius:12, background:'#fff', border:'none', color:'#000', fontWeight:700 }}>Otwórz w Spotify</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {scanned.parsed.type === 'youtube' && (
-                <div>
-                  <div style={{ position:'relative', paddingTop:'56.25%', borderRadius:12, overflow:'hidden', border:'1px solid #2a2a2a' }}>
-                    {ytId && (
-                      <iframe
-                        key={ytId}
-                        src={`https://www.youtube.com/embed/${ytId}?autoplay=1`}
-                        title="YouTube player"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowFullScreen
-                        style={{ position:'absolute', inset:0, width:'100%', height:'100%', border:0 }}
-                      />
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {scanned.parsed.type === 'unknown' && (
-                <div>Nie rozpoznano linku. Upewnij się, że to URL z Spotify lub YouTube.</div>
-              )}
-            </div>
-          )}
-
-          <footer style={{ opacity:.7, fontSize:12 }}>
-            Tip: na iOS może być konieczne włączenie dostępu do kamery w Safari. 
-          </footer>
-        </div>
-      </div>
-    </div>
-  );
-}
+                            <div style={{ background:'#101010', border:'1px solid #303030', borderRadius:12, padding:12 }}>
+                              <h4>Wbudowany odtwarzacz (Web Playback SDK)</h4>
+                              <Player backend={BACKEND} onReady={(id)=>setDeviceId(id)} />
+                              <div style={{ marginTop:8, display:'flex', gap:8, flexWrap:'wrap' }}>
+                                {scanned.parsed.subtype === 'track' && (
