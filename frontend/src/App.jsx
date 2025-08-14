@@ -108,40 +108,57 @@ export default function App() {
   }
 
   async function playSmart() {
-    if (!scanned) return;
-    const p = scanned.parsed;
-    if (p.type !== 'spotify' || p.subtype !== 'track') {
-      // dla non-track i tak otwórz w Spotify
-      return openAppOrWeb(p);
-    }
+  if (!scanned) return;
+  const p = scanned.parsed;
 
-    // 1) jeśli Premium + SDK gotowy → graj w przeglądarce
-    if (authStatus === 'ok' && me?.product === 'premium' && deviceId && window.__qr_player) {
-      try {
-        if (window.__qr_player.activateElement) await window.__qr_player.activateElement();
-        // upewnij się, że to urządzenie jest aktywne i ma auto-play
-        await fetch(`${BACKEND}/transfer-playback`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_id: deviceId, play: true })
-        });
-        const uri = `spotify:track:${p.id}`;
-        await fetch(`${BACKEND}/play`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_id: deviceId, uris: [uri] })
-        });
-        return;
-      } catch (e) {
-        console.warn('Falling back to app/web, reason:', e);
-      }
-    }
-
-    // 2) fallback: aplikacja / web
-    openAppOrWeb(p);
+  // Jeżeli to nie track (np. album/playlist) – otwórz w app/web
+  if (p.type !== 'spotify' || p.subtype !== 'track') {
+    return openAppOrWeb(p);
   }
+
+  // 1) Premium + SDK gotowy → gramy w przeglądarce
+  if (authStatus === 'ok' && me?.product === 'premium' && deviceId && window.__qr_player) {
+    try {
+      // Aktywuj audio po kliknięciu użytkownika (wymóg autoplay policy)
+      if (window.__qr_player.activateElement) {
+        await window.__qr_player.activateElement();
+      }
+
+      // Przełącz odtwarzanie na urządzenie SDK i od razu je "wybudź"
+      const t1 = await fetch(`${BACKEND}/transfer-playback`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId, play: true })
+      });
+      console.log('transfer-playback status:', t1.status);
+
+      // Daj SDK chwilę na „złapanie” roli aktywnego urządzenia
+      await new Promise(r => setTimeout(r, 500));
+
+      // Ustaw konkretny utwór do grania
+      const uri = `spotify:track:${p.id}`;
+      const t2 = await fetch(`${BACKEND}/play`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId, uris: [uri] })
+      });
+      console.log('play status:', t2.status);
+
+      // Fallback: gdyby Web API nie wystartowało — poproś SDK o resume()
+      if (t2.status !== 204 && window.__qr_player?.resume) {
+        await window.__qr_player.resume();
+      }
+      return;
+    } catch (e) {
+      console.warn('Fallback do app/web, powód:', e);
+    }
+  }
+
+  // 2) Brak Premium albo SDK nie gotowe → app/web
+  openAppOrWeb(p);
+}
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', color: '#fff', background:'#121212', minHeight:'100vh' }}>
